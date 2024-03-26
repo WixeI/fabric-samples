@@ -522,7 +522,7 @@ func (s *SmartContract) AnswerTradeAsOwner(ctx contractapi.TransactionContextInt
 	// Check if both SellerResponse and BuyerResponse are "yes"
 	if foundAnswer.SellerResponse.Value == "yes" && foundAnswer.BuyerResponse.Value == "yes" {
 		// Get bond from ledger
-		bonds, err := s.GetBond(ctx, foundTrade.Cusip)
+		bonds, err := s.getAllBonds(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to get bond: %v", err)
 		}
@@ -530,13 +530,13 @@ func (s *SmartContract) AnswerTradeAsOwner(ctx contractapi.TransactionContextInt
 		// Find the bond owned by the caller
 		var ownedBond *AgencyMBSPassthrough
 		for _, bond := range bonds {
-			if bond.Public.OwnerHash == sellerIDHash {
-				ownedBond = &bond.Public
+			if bond.OwnerHash == sellerIDHash {
+				ownedBond = &bond
 				break
 			}
 		}
 		if ownedBond == nil {
-			return fmt.Errorf("you do not own any bonds for this trade")
+			return fmt.Errorf("the seller does not own any bonds for this trade")
 		}
 
 		// Update bond owner
