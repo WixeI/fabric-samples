@@ -45,19 +45,17 @@ type DirectTrade struct {
 	CreatedAt     time.Time `json:"createdAt"`
 }
 
+// AnswerResponse represents the response value and timestamp for an answer.
+type AnswerResponse struct {
+	Value     string    `json:"value"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
 // Answer for Direct Trade
 type Answer struct {
-	SellerIDHash string `json:"sellerIDHash"`
-
-	SellerResponse struct {
-		Value     string    `json:"value"`
-		Timestamp time.Time `json:"timestamp"`
-	} `json:"sellerResponse"`
-
-	BuyerResponse struct {
-		Value     string    `json:"value"`
-		Timestamp time.Time `json:"timestamp"`
-	} `json:"buyerResponse"`
+	SellerIDHash   string         `json:"sellerIDHash"`
+	SellerResponse AnswerResponse `json:"sellerResponse"`
+	BuyerResponse  AnswerResponse `json:"buyerResponse"`
 }
 
 // Trade Record
@@ -83,6 +81,8 @@ type Ledger struct {
 func (s *SmartContract) CreateBondPublic(ctx contractapi.TransactionContextInterface, uid, ownerHash, bondID, cusip, class1 string, originalFace int) (string, error) {
 	// Generating UID for bond. This part should be done manually and inputed in the args. In the front-end, you can manage this properly
 	// uid := generateUID()
+	//TODO: Add validation for uid
+	//TODO: Add validation for ownerHash. Maybe it's possible to identify who ran the function while still getting the endorsers to work properly.
 
 	// Generating OwnerHash. This part should be done manually and inputed in the args. In the front-end, you can manage this properly
 	// ownerHash, err := s.GenerateOrgHash(ctx)
@@ -199,8 +199,14 @@ func (s *SmartContract) IsOwner(ctx contractapi.TransactionContextInterface, own
 }
 
 // GetBond returns all bonds from the ledger that have the given cusip and their corresponding private bonds
-func (s *SmartContract) GetBond(ctx contractapi.TransactionContextInterface, cusip string) ([][]interface{}, error) {
-	var result [][]interface{}
+func (s *SmartContract) GetBond(ctx contractapi.TransactionContextInterface, cusip string) ([]struct {
+	Public  AgencyMBSPassthrough
+	Private PrivateBond
+}, error) {
+	var result []struct {
+		Public  AgencyMBSPassthrough
+		Private PrivateBond
+	}
 
 	// Retrieve bonds from ledger
 	bonds, err := s.getAllBonds(ctx)
@@ -216,7 +222,13 @@ func (s *SmartContract) GetBond(ctx contractapi.TransactionContextInterface, cus
 				return nil, err
 			}
 
-			result = append(result, []interface{}{bond, privateBond})
+			result = append(result, struct {
+				Public  AgencyMBSPassthrough
+				Private PrivateBond
+			}{
+				Public:  bond,
+				Private: privateBond,
+			})
 		}
 	}
 
@@ -270,54 +282,6 @@ func (s *SmartContract) GetAllYourBonds(ctx contractapi.TransactionContextInterf
 	}
 
 	return yourBonds, nil
-}
-
-// CreateTrade initiates a new direct trade
-func (s *SmartContract) CreateTrade(ctx contractapi.TransactionContextInterface, directTradeID, bidderHash, cusip, createdAtString string, originalFace int, bidPrice float64) (string, error) {
-	// Generating UID for direct trade. This part should be done manually and inputed in the args. In the front-end, you can manage this properly
-	// directTradeID := generateUID()
-	// TODO: Add validation here.
-
-	// Define the layout of the time string
-	layout := "2006-01-02T15:04:05Z"
-
-	// Parse the time string into a time.Time type
-	parsedTime, err := time.Parse(layout, createdAtString)
-	if err != nil {
-		return "", fmt.Errorf("error parsing time: %v", err)
-	}
-
-	// Generating BidderHash
-	// bidderHash, err := s.GenerateOrgHash(ctx)
-	// if err != nil {
-	// 	return "", fmt.Errorf("failed to generate bidder hash: %v", err)
-	// }
-	// TODO: see if it's possible to get the mspid of the one executing the chaincode, but still get the endorsers to work properly
-
-	// Creating new direct trade object
-	trade := DirectTrade{
-		DirectTradeID: directTradeID,
-		Cusip:         cusip,
-		OriginalFace:  originalFace,
-		BidPrice:      bidPrice,
-		BidderHash:    bidderHash,
-		State:         "Open",
-		Answers:       []Answer{},
-		CreatedAt:     parsedTime,
-	}
-
-	// Storing direct trade in ledger
-	ledger, err := s.GetLedger(ctx)
-	if err != nil {
-		return "", err
-	}
-	ledger.DirectTrades = append(ledger.DirectTrades, trade)
-	err = s.updateLedger(ctx, ledger)
-	if err != nil {
-		return "", fmt.Errorf("failed to store direct trade: %v", err)
-	}
-
-	return directTradeID, nil
 }
 
 // GetYourDirectTrades returns all direct trades where the caller is the owner
@@ -380,6 +344,248 @@ func (s *SmartContract) GetLedger(ctx contractapi.TransactionContextInterface) (
 	}
 
 	return &ledger, nil
+}
+
+// CreateTrade initiates a new direct trade
+func (s *SmartContract) CreateTrade(ctx contractapi.TransactionContextInterface, directTradeID, bidderHash, cusip, createdAtString string, originalFace int, bidPrice float64) (string, error) {
+	// Generating UID for direct trade. This part should be done manually and inputed in the args. In the front-end, you can manage this properly
+	// directTradeID := generateUID()
+	// TODO: Add validation here.
+
+	// Define the layout of the time string
+	layout := "2006-01-02T15:04:05Z"
+
+	// Parse the time string into a time.Time type
+	parsedTime, err := time.Parse(layout, createdAtString)
+	if err != nil {
+		return "", fmt.Errorf("error parsing time: %v", err)
+	}
+
+	// Generating BidderHash
+	// bidderHash, err := s.GenerateOrgHash(ctx)
+	// if err != nil {
+	// 	return "", fmt.Errorf("failed to generate bidder hash: %v", err)
+	// }
+	// TODO: see if it's possible to get the mspid of the one executing the chaincode, but still get the endorsers to work properly
+
+	// Creating new direct trade object
+	trade := DirectTrade{
+		DirectTradeID: directTradeID,
+		Cusip:         cusip,
+		OriginalFace:  originalFace,
+		BidPrice:      bidPrice,
+		BidderHash:    bidderHash,
+		State:         "Open",
+		Answers:       []Answer{},
+		CreatedAt:     parsedTime,
+	}
+
+	// Storing direct trade in ledger
+	ledger, err := s.GetLedger(ctx)
+	if err != nil {
+		return "", err
+	}
+	ledger.DirectTrades = append(ledger.DirectTrades, trade)
+	err = s.updateLedger(ctx, ledger)
+	if err != nil {
+		return "", fmt.Errorf("failed to store direct trade: %v", err)
+	}
+
+	return directTradeID, nil
+}
+
+// AnswerTrade updates the answer for a direct trade
+func (s *SmartContract) AnswerTrade(ctx contractapi.TransactionContextInterface, directTradeID, sellerIDHash, answerValue string, timestamp time.Time) error {
+	// Retrieve ledger
+	ledger, err := s.GetLedger(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Find the direct trade
+	var foundTrade *DirectTrade
+	for i, trade := range ledger.DirectTrades {
+		if trade.DirectTradeID == directTradeID {
+			foundTrade = &ledger.DirectTrades[i]
+			break
+		}
+	}
+	if foundTrade == nil {
+		return fmt.Errorf("direct trade not found")
+	}
+
+	// Find or create answer object
+	var foundAnswer *Answer
+	for i, ans := range foundTrade.Answers {
+		if ans.SellerIDHash == sellerIDHash {
+			foundAnswer = &foundTrade.Answers[i]
+			break
+		}
+	}
+	if foundAnswer == nil {
+		// Create new answer object
+		newAnswer := Answer{
+			SellerIDHash: sellerIDHash,
+			SellerResponse: AnswerResponse{
+				Value:     "",
+				Timestamp: time.Time{},
+			},
+			BuyerResponse: AnswerResponse{
+				Value:     "",
+				Timestamp: time.Time{},
+			},
+		}
+		foundTrade.Answers = append(foundTrade.Answers, newAnswer)
+		foundAnswer = &foundTrade.Answers[len(foundTrade.Answers)-1]
+	}
+
+	// Update SellerResponse
+	foundAnswer.SellerResponse.Value = answerValue
+	foundAnswer.SellerResponse.Timestamp = timestamp
+
+	// Clear BuyerResponse
+	foundAnswer.BuyerResponse.Value = ""
+	foundAnswer.BuyerResponse.Timestamp = time.Time{}
+
+	// Update ledger
+	err = s.updateLedger(ctx, ledger)
+	if err != nil {
+		return fmt.Errorf("failed to update ledger: %v", err)
+	}
+
+	return nil
+}
+
+func (s *SmartContract) AnswerTradeAsOwner(ctx contractapi.TransactionContextInterface, directTradeID, sellerIDHash, answerValue string, timestamp time.Time) error {
+
+	ledger, err := s.GetLedger(ctx)
+	if err != nil {
+		return err
+	}
+
+	var foundTrade *DirectTrade
+	for i, trade := range ledger.DirectTrades {
+		if trade.DirectTradeID == directTradeID {
+			foundTrade = &ledger.DirectTrades[i]
+			break
+		}
+	}
+	if foundTrade == nil {
+		return fmt.Errorf("direct trade not found")
+	}
+
+	// Compare MSP ID with BidderHash
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get MSP ID: %v", err)
+	}
+
+	if foundTrade.BidderHash != mspID {
+		return fmt.Errorf("you are not the owner of the trade")
+	}
+
+	// Find or create answer object
+	var foundAnswer *Answer
+	for i, ans := range foundTrade.Answers {
+		if ans.SellerIDHash == sellerIDHash {
+			foundAnswer = &foundTrade.Answers[i]
+			break
+		}
+	}
+	if foundAnswer == nil {
+		// Create new answer object
+		newAnswer := Answer{
+			SellerIDHash: sellerIDHash,
+			SellerResponse: AnswerResponse{
+				Value:     "",
+				Timestamp: time.Time{},
+			},
+			BuyerResponse: AnswerResponse{
+				Value:     "",
+				Timestamp: time.Time{},
+			},
+		}
+		foundTrade.Answers = append(foundTrade.Answers, newAnswer)
+		foundAnswer = &foundTrade.Answers[len(foundTrade.Answers)-1]
+	}
+
+	// Update BuyerResponse
+	foundAnswer.BuyerResponse.Value = answerValue
+	foundAnswer.BuyerResponse.Timestamp = timestamp
+
+	// Update ledger
+	err = s.updateLedger(ctx, ledger)
+	if err != nil {
+		return fmt.Errorf("failed to update ledger: %v", err)
+	}
+
+	// Check if both SellerResponse and BuyerResponse are "yes"
+	if foundAnswer.SellerResponse.Value == "yes" && foundAnswer.BuyerResponse.Value == "yes" {
+		// Get bond from ledger
+		bonds, err := s.GetBond(ctx, foundTrade.Cusip)
+		if err != nil {
+			return fmt.Errorf("failed to get bond: %v", err)
+		}
+
+		// Find the bond owned by the caller
+		var ownedBond *AgencyMBSPassthrough
+		for _, bond := range bonds {
+			if bond.Public.OwnerHash == sellerIDHash {
+				ownedBond = &bond.Public
+				break
+			}
+		}
+		if ownedBond == nil {
+			return fmt.Errorf("you do not own any bonds for this trade")
+		}
+
+		// Update bond owner
+		ownedBond.OwnerHash = foundAnswer.SellerIDHash
+
+		// Generate transaction
+		transaction := s.GenerateTransactionObject(sellerIDHash, foundAnswer.SellerIDHash, foundTrade.Cusip, foundTrade.OriginalFace, fmt.Sprintf("%.2f", foundTrade.BidPrice), timestamp)
+
+		// Add transaction to ledger
+		ledger.Transactions = append(ledger.Transactions, transaction)
+
+		// Update ledger
+		err = s.updateLedger(ctx, ledger)
+		if err != nil {
+			return fmt.Errorf("failed to update ledger: %v", err)
+		}
+	}
+
+	return nil
+}
+
+// CreateTransaction generates a new transaction and adds it to the ledger
+func (s *SmartContract) CreateTransaction(ctx contractapi.TransactionContextInterface, buyerID, sellerID, cusip string, originalFace int, boughtPrice float64, timestamp time.Time) error {
+	// Create transaction object
+	transaction := Transaction{
+		BuyerID:      buyerID,
+		SellerID:     sellerID,
+		Cusip:        cusip,
+		OriginalFace: originalFace,
+		BoughtPrice:  fmt.Sprintf("%.2f", boughtPrice),
+		Timestamp:    timestamp,
+	}
+
+	// Retrieve ledger
+	ledger, err := s.GetLedger(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Add transaction to ledger
+	ledger.Transactions = append(ledger.Transactions, transaction)
+
+	// Update ledger
+	err = s.updateLedger(ctx, ledger)
+	if err != nil {
+		return fmt.Errorf("failed to update ledger: %v", err)
+	}
+
+	return nil
 }
 
 // ⭐ Helper functions for accessing ledger and private collection ⭐
