@@ -473,7 +473,9 @@ func (s *SmartContract) AnswerTradeAsOwner(ctx contractapi.TransactionContextInt
 	if foundTrade == nil {
 		return fmt.Errorf("direct trade not found")
 	}
-
+	if foundTrade.State != "Open" {
+		return fmt.Errorf("direct trade is closed")
+	}
 	// Compare MSP ID with BidderHash
 	mspID, err := ctx.GetClientIdentity().GetMSPID()
 	if err != nil {
@@ -514,10 +516,10 @@ func (s *SmartContract) AnswerTradeAsOwner(ctx contractapi.TransactionContextInt
 	foundAnswer.BuyerResponse.Timestamp = timestamp
 
 	// Update ledger
-	err = s.updateLedger(ctx, ledger)
-	if err != nil {
-		return fmt.Errorf("failed to update ledger: %v", err)
-	}
+	// err = s.updateLedger(ctx, ledger)
+	// if err != nil {
+	// 	return fmt.Errorf("failed to update ledger: %v", err)
+	// }
 
 	// Check if both SellerResponse and BuyerResponse are "yes"
 	if foundAnswer.SellerResponse.Value == "yes" && foundAnswer.BuyerResponse.Value == "yes" {
@@ -540,19 +542,28 @@ func (s *SmartContract) AnswerTradeAsOwner(ctx contractapi.TransactionContextInt
 		}
 
 		// Update bond owner
-		ownedBond.OwnerHash = foundAnswer.SellerIDHash
+		for i, bond := range ledger.Bonds {
+			if bond.OwnerHash == sellerIDHash {
+				ownedBond = &bond
+				ledger.Bonds[i].OwnerHash = foundTrade.BidderHash
+				break
+			}
+		}
+
+		// Close the Trade
+		foundTrade.State = "Closed"
 
 		// Generate transaction
-		transaction := s.GenerateTransactionObject(sellerIDHash, foundAnswer.SellerIDHash, foundTrade.Cusip, foundTrade.OriginalFace, fmt.Sprintf("%.2f", foundTrade.BidPrice), timestamp)
+		transaction := s.GenerateTransactionObject(foundTrade.BidderHash, foundAnswer.SellerIDHash, foundTrade.Cusip, foundTrade.OriginalFace, fmt.Sprintf("%.2f", foundTrade.BidPrice), timestamp)
 
 		// Add transaction to ledger
 		ledger.Transactions = append(ledger.Transactions, transaction)
+	}
 
-		// Update ledger
-		err = s.updateLedger(ctx, ledger)
-		if err != nil {
-			return fmt.Errorf("failed to update ledger: %v", err)
-		}
+	// Update ledger
+	err = s.updateLedger(ctx, ledger)
+	if err != nil {
+		return fmt.Errorf("failed to update ledger: %v", err)
 	}
 
 	return nil
