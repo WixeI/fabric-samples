@@ -45,10 +45,11 @@ type DirectTrade struct {
 	CreatedAt     time.Time `json:"createdAt"`
 }
 
-// AnswerResponse represents the response value and timestamp for an answer.
+// AnswerResponse represents the response value, timestamp, and optional counter price for an answer.
 type AnswerResponse struct {
-	Value     string    `json:"value"`
-	Timestamp time.Time `json:"timestamp"`
+	Value        string    `json:"value"`
+	Timestamp    time.Time `json:"timestamp"`
+	CounterPrice float64   `json:"counterPrice"`
 }
 
 // Answer for Direct Trade
@@ -395,7 +396,7 @@ func (s *SmartContract) CreateTrade(ctx contractapi.TransactionContextInterface,
 }
 
 // AnswerTrade updates the answer for a direct trade
-func (s *SmartContract) AnswerTrade(ctx contractapi.TransactionContextInterface, directTradeID, sellerIDHash, answerValue string, timestamp time.Time) error {
+func (s *SmartContract) AnswerTrade(ctx contractapi.TransactionContextInterface, directTradeID, sellerIDHash, answerValue string, timestamp time.Time, counterPrice float64) error {
 	// Retrieve ledger
 	ledger, err := s.GetLedger(ctx)
 	if err != nil {
@@ -427,12 +428,14 @@ func (s *SmartContract) AnswerTrade(ctx contractapi.TransactionContextInterface,
 		newAnswer := Answer{
 			SellerIDHash: sellerIDHash,
 			SellerResponse: AnswerResponse{
-				Value:     "",
-				Timestamp: time.Time{},
+				Value:        "",
+				Timestamp:    time.Time{},
+				CounterPrice: 0.0,
 			},
 			BuyerResponse: AnswerResponse{
-				Value:     "",
-				Timestamp: time.Time{},
+				Value:        "",
+				Timestamp:    time.Time{},
+				CounterPrice: 0.0,
 			},
 		}
 		foundTrade.Answers = append(foundTrade.Answers, newAnswer)
@@ -443,9 +446,62 @@ func (s *SmartContract) AnswerTrade(ctx contractapi.TransactionContextInterface,
 	foundAnswer.SellerResponse.Value = answerValue
 	foundAnswer.SellerResponse.Timestamp = timestamp
 
-	// Clear BuyerResponse
-	foundAnswer.BuyerResponse.Value = ""
-	foundAnswer.BuyerResponse.Timestamp = time.Time{}
+	// If the buyer or seller says no, can you keep negotiating? Or is it over?
+
+	if answerValue == "done" || answerValue == "no" {
+		if foundAnswer.BuyerResponse.Value == "" {
+			foundAnswer.SellerResponse.CounterPrice = foundTrade.BidPrice
+
+		} else {
+			foundAnswer.SellerResponse.CounterPrice = foundAnswer.BuyerResponse.CounterPrice
+
+			if foundAnswer.BuyerResponse.Value == "done" {
+				//transaction Creation Here
+				// Get bond from ledger
+				bonds, err := s.getAllBonds(ctx)
+				if err != nil {
+					return fmt.Errorf("failed to get bond: %v", err)
+				}
+
+				// Find the bond owned by the caller
+				var ownedBond *AgencyMBSPassthrough
+				for _, bond := range bonds {
+					if bond.OwnerHash == sellerIDHash {
+						ownedBond = &bond
+						break
+					}
+				}
+				if ownedBond == nil {
+					return fmt.Errorf("the seller does not own any bonds for this trade")
+				}
+
+				// Update bond owner
+				for i, bond := range ledger.Bonds {
+					if bond.OwnerHash == sellerIDHash {
+						ownedBond = &bond
+						ledger.Bonds[i].OwnerHash = foundTrade.BidderHash
+						break
+					}
+				}
+
+				// Close the Trade
+				foundTrade.State = "Closed"
+
+				// Generate transaction
+				transaction := s.GenerateTransactionObject(foundTrade.BidderHash, foundAnswer.SellerIDHash, foundTrade.Cusip, foundTrade.OriginalFace, fmt.Sprintf("%.2f", foundAnswer.BuyerResponse.CounterPrice), timestamp)
+
+				// Add transaction to ledger
+				ledger.Transactions = append(ledger.Transactions, transaction)
+			}
+		}
+
+	} else if answerValue == "counter" {
+		if foundAnswer.BuyerResponse.Value != "done" {
+			foundAnswer.SellerResponse.CounterPrice = counterPrice
+		} else {
+			return fmt.Errorf("the buyer accepted the price. You cannot counter it: %v", foundAnswer.BuyerResponse.CounterPrice)
+		}
+	}
 
 	// Update ledger
 	err = s.updateLedger(ctx, ledger)
@@ -456,7 +512,7 @@ func (s *SmartContract) AnswerTrade(ctx contractapi.TransactionContextInterface,
 	return nil
 }
 
-func (s *SmartContract) AnswerTradeAsOwner(ctx contractapi.TransactionContextInterface, directTradeID, sellerIDHash, answerValue string, timestamp time.Time) error {
+func (s *SmartContract) AnswerTradeAsOwner(ctx contractapi.TransactionContextInterface, directTradeID, sellerIDHash, answerValue string, timestamp time.Time, counterPrice float64) error {
 
 	ledger, err := s.GetLedger(ctx)
 	if err != nil {
@@ -481,7 +537,6 @@ func (s *SmartContract) AnswerTradeAsOwner(ctx contractapi.TransactionContextInt
 	if err != nil {
 		return fmt.Errorf("failed to get MSP ID: %v", err)
 	}
-
 	if foundTrade.BidderHash != mspID {
 		return fmt.Errorf("you are not the owner of the trade")
 	}
@@ -495,69 +550,65 @@ func (s *SmartContract) AnswerTradeAsOwner(ctx contractapi.TransactionContextInt
 		}
 	}
 	if foundAnswer == nil {
-		// Create new answer object
-		newAnswer := Answer{
-			SellerIDHash: sellerIDHash,
-			SellerResponse: AnswerResponse{
-				Value:     "",
-				Timestamp: time.Time{},
-			},
-			BuyerResponse: AnswerResponse{
-				Value:     "",
-				Timestamp: time.Time{},
-			},
-		}
-		foundTrade.Answers = append(foundTrade.Answers, newAnswer)
-		foundAnswer = &foundTrade.Answers[len(foundTrade.Answers)-1]
+		return fmt.Errorf("there is not an answer for this identifier: %v", sellerIDHash)
 	}
 
 	// Update BuyerResponse
 	foundAnswer.BuyerResponse.Value = answerValue
 	foundAnswer.BuyerResponse.Timestamp = timestamp
 
-	// Update ledger
-	// err = s.updateLedger(ctx, ledger)
-	// if err != nil {
-	// 	return fmt.Errorf("failed to update ledger: %v", err)
-	// }
+	if foundAnswer.SellerResponse.Value == "out" {
+		return fmt.Errorf("seller refused trade, you cannot answer it")
+	}
 
-	// Check if both SellerResponse and BuyerResponse are "yes"
-	if foundAnswer.SellerResponse.Value == "yes" && foundAnswer.BuyerResponse.Value == "yes" {
-		// Get bond from ledger
-		bonds, err := s.getAllBonds(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get bond: %v", err)
+	if answerValue == "counter" {
+		if foundAnswer.SellerResponse.Value == "done" {
+			return fmt.Errorf("seller already accepted the BidPrice: %v", foundTrade.BidPrice)
 		}
+		foundAnswer.BuyerResponse.CounterPrice = counterPrice
+	} else if answerValue == "done" {
+		foundAnswer.BuyerResponse.CounterPrice = foundAnswer.SellerResponse.CounterPrice
 
-		// Find the bond owned by the caller
-		var ownedBond *AgencyMBSPassthrough
-		for _, bond := range bonds {
-			if bond.OwnerHash == sellerIDHash {
-				ownedBond = &bond
-				break
+		// If seller answers with counter, it still needs their confirmation
+		if foundAnswer.SellerResponse.Value == "done" {
+			// Create transaction
+
+			// Get bond from ledger
+			bonds, err := s.getAllBonds(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to get bond: %v", err)
 			}
-		}
-		if ownedBond == nil {
-			return fmt.Errorf("the seller does not own any bonds for this trade")
-		}
 
-		// Update bond owner
-		for i, bond := range ledger.Bonds {
-			if bond.OwnerHash == sellerIDHash {
-				ownedBond = &bond
-				ledger.Bonds[i].OwnerHash = foundTrade.BidderHash
-				break
+			// Find the bond owned by the caller
+			var ownedBond *AgencyMBSPassthrough
+			for _, bond := range bonds {
+				if bond.OwnerHash == sellerIDHash {
+					ownedBond = &bond
+					break
+				}
 			}
+			if ownedBond == nil {
+				return fmt.Errorf("the seller does not own any bonds for this trade")
+			}
+
+			// Update bond owner
+			for i, bond := range ledger.Bonds {
+				if bond.OwnerHash == sellerIDHash {
+					ownedBond = &bond
+					ledger.Bonds[i].OwnerHash = foundTrade.BidderHash
+					break
+				}
+			}
+
+			// Close the Trade
+			foundTrade.State = "Closed"
+
+			// Generate transaction
+			transaction := s.GenerateTransactionObject(foundTrade.BidderHash, foundAnswer.SellerIDHash, foundTrade.Cusip, foundTrade.OriginalFace, fmt.Sprintf("%.2f", foundAnswer.BuyerResponse.CounterPrice), timestamp)
+
+			// Add transaction to ledger
+			ledger.Transactions = append(ledger.Transactions, transaction)
 		}
-
-		// Close the Trade
-		foundTrade.State = "Closed"
-
-		// Generate transaction
-		transaction := s.GenerateTransactionObject(foundTrade.BidderHash, foundAnswer.SellerIDHash, foundTrade.Cusip, foundTrade.OriginalFace, fmt.Sprintf("%.2f", foundTrade.BidPrice), timestamp)
-
-		// Add transaction to ledger
-		ledger.Transactions = append(ledger.Transactions, transaction)
 	}
 
 	// Update ledger
@@ -720,4 +771,22 @@ func (s *SmartContract) getAllTransactions(ctx contractapi.TransactionContextInt
 
 func generateUID() string {
 	return uuid.New().String()
+}
+
+// ⚠️ Debugger function: ClearLedger resets the ledger by making it empty
+func (s *SmartContract) ClearLedger(ctx contractapi.TransactionContextInterface) error {
+	// Create an empty ledger
+	emptyLedger := &Ledger{
+		Bonds:        []AgencyMBSPassthrough{},
+		DirectTrades: []DirectTrade{},
+		Transactions: []Transaction{},
+	}
+
+	// Update the ledger
+	err := s.updateLedger(ctx, emptyLedger)
+	if err != nil {
+		return fmt.Errorf("failed to clear ledger: %v", err)
+	}
+
+	return nil
 }
